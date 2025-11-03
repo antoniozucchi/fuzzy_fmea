@@ -1,21 +1,24 @@
 # -*- coding: utf-8 -*-
 # =========================================================
-# Fuzzy FMEA – Versão Completa (Robusta para CSV) – v3
+# Fuzzy FMEA – Classificação de Riscos Geotécnicos
+# PUC-Rio - Versão Otimizada
 # =========================================================
-import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import streamlit as st
 from scipy.stats import spearmanr
 
-# -------------------- Config Streamlit/Matplotlib --------------------
+# -------------------- Config Streamlit (DEVE SER PRIMEIRO) --------------------
 st.set_page_config(
-    page_title="Classificação de Riscos Geotécnicos em Taludes (FMEA/Fuzzy)",
-    layout="wide"
+    page_title="Fuzzy FMEA - Riscos Geotécnicos em Taludes",
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
+# -------------------- Configurações Matplotlib --------------------
 plt.rcParams["axes.grid"] = True
+plt.rcParams['figure.dpi'] = 100
 
 # -------------------- Parâmetros/Funções base ------------------------
 CONFIG = {
@@ -46,12 +49,14 @@ CONFIG = {
     "RULE_SO":"default_monotonic",
     "RULE_SD":"default_d_adjust"
 }
+
 D_REF=CONFIG["D_REF"]
 NPR_BANDS_NORM=CONFIG["NPR_BANDS_NORM"]
 FUZZY_BANDS=CONFIG["FUZZY_BANDS"]
 BAND_ORDER=CONFIG["BAND_ORDER"]
 BAND_COLORS=CONFIG["BAND_COLORS"]
 
+# -------------------- Funções Auxiliares --------------------
 def to_band(x,bands):
     try:
         if np.isnan(x): return None
@@ -61,30 +66,24 @@ def to_band(x,bands):
         if x < thr: return name
     return bands[-1][1]
 
-def left_shoulder(x,a,b): return np.clip(np.where(x<=a,1,np.where(x>=b,0,(b-x)/(b-a+1e-9))),0,1)
-def right_shoulder(x,c,d): return np.clip(np.where(x<=c,0,np.where(x>=d,1,(x-c)/(d-c+1e-9))),0,1)
+def left_shoulder(x,a,b): 
+    return np.clip(np.where(x<=a,1,np.where(x>=b,0,(b-x)/(b-a+1e-9))),0,1)
+
+def right_shoulder(x,c,d): 
+    return np.clip(np.where(x<=c,0,np.where(x>=d,1,(x-c)/(d-c+1e-9))),0,1)
+
 def trapmf_safe(x,a,b,c,d):
     up=np.where(x<=a,0,np.where(x<b,(x-a)/(b-a+1e-9),1))
     down=np.where(x<=c,1,np.where(x<d,(d-x)/(d-c+1e-9),0))
     return np.clip(np.minimum(up,down),0,1)
 
 def coerce_numeric(s):
-    # aceita decimal com vírgula
     return pd.to_numeric(s.astype(str).str.replace(",", ".", regex=False), errors="coerce")
 
-# -------------------- Leitura robusta do CSV -------------------------
-st.title("Classificação de Riscos Geotécnicos em Taludes Rodoviários Utilizando a Metodologia FMEA")
-st.write("## PUC-Rio")
-st.set_page_config(page_title="Classificação de Riscos Geotécnicos em Taludes Rodoviários Utilizando a Metodologia FMEA", layout="wide")
-st.write("### Antônio Augusto Zucchi Leite, Fernanda Defilippi Bittar, Antonio Krishnamurti Beleño de Oliveira, Márcio Leão")
-
-
-uploaded = st.file_uploader("📁 Envie seu CSV (ID, S, O, D, NPR). Aceita ; ou , e decimal com vírgula.", type=["csv"])
-
 def read_csv_robust(file):
-    # tenta utf-8-sig / latin-1; autodetecta separador; se vier 1 coluna, tenta sep=';'
+    """Leitura robusta de CSV com detecção automática de separador e encoding"""
     last_err = None
-    for enc in ["utf-8-sig", "latin-1"]:
+    for enc in ["utf-8-sig", "latin-1", "iso-8859-1"]:
         try:
             df = pd.read_csv(file, sep=None, engine="python", encoding=enc)
             if df.shape[1] == 1:
@@ -96,89 +95,9 @@ def read_csv_robust(file):
             file.seek(0)
     raise last_err
 
-if uploaded:
-    try:
-        df_raw = read_csv_robust(uploaded)
-        st.success(f"✅ CSV carregado: {uploaded.name}")
-    except Exception as e:
-        st.error(f"Falha ao ler CSV: {e}")
-        st.stop()
-else:
-    st.info("Nenhum arquivo enviado. Usando dados de exemplo.")
-    df_raw = pd.DataFrame([
-        [1,6,3,3,54],[2,9,3,6,162],[3,6,3,3,54],[4,8,3,7,168],[5,6,6,5,180],
-        [6,10,3,8,240],[7,5,3,3,45],[8,7,5,4,140],[9,8,5,7,280],[10,6,4,6,144],
-        [11,9,4,7,252],[12,5,7,4,140],[13,7,3,6,126],[14,8,3,5,120],[15,8,4,6,192],
-        [16,7,5,5,175],[17,4,3,3,36],[18,5,5,6,150],[19,9,2,4,72],[20,8,2,8,128]
-    ], columns=["ID","S","O","D","NPR"])
-
-st.write("### 📄 Pré-visualização do arquivo")
-st.dataframe(df_raw.head(30), use_container_width=True)
-
-# -------------------- Mapeamento de colunas (sidebar) ----------------
-st.sidebar.header("⚙️ Mapeamento de colunas")
-
-cols = list(df_raw.columns)
-lower = {c: c.lower() for c in cols}
-
-def guess(syns):
-    for c in cols:
-        for k in syns:
-            if lower[c] == k: return c
-    for c in cols:
-        for k in syns:
-            if k in lower[c]: return c
-    return cols[0] if cols else None
-
-id_guess = guess(["id","item"])
-s_guess  = guess(["s","sev","severidade","severity"])
-o_guess  = guess(["o","oco","ocorrencia","ocorrência","occurrence"])
-d_guess  = guess(["d","det","detec","detecção","deteccao","detection"])
-npr_guess= guess(["npr","rpn"])
-
-sel_id  = st.sidebar.selectbox("Coluna ID",   cols, index=cols.index(id_guess)  if id_guess  in cols else 0)
-sel_s   = st.sidebar.selectbox("Coluna S",    cols, index=cols.index(s_guess)   if s_guess   in cols else 0)
-sel_o   = st.sidebar.selectbox("Coluna O",    cols, index=cols.index(o_guess)   if o_guess   in cols else 0)
-sel_d   = st.sidebar.selectbox("Coluna D",    cols, index=cols.index(d_guess)   if d_guess   in cols else 0)
-sel_npr = st.sidebar.selectbox("Coluna NPR",  cols, index=cols.index(npr_guess) if npr_guess in cols else 0)
-
-df = df_raw.rename(columns={
-    sel_id:"ID", sel_s:"S", sel_o:"O", sel_d:"D", sel_npr:"NPR"
-}).copy()
-
-# força numérico
-for c in ["ID","S","O","D","NPR"]:
-    if c in df.columns:
-        df[c] = coerce_numeric(df[c])
-
-# preenche NPR ausente
-if df["NPR"].isna().any():
-    df.loc[df["NPR"].isna(), "NPR"] = df.loc[df["NPR"].isna(), "S"] * df.loc[df["NPR"].isna(), "O"] * df.loc[df["NPR"].isna(), "D"]
-
-# valida presença dos campos
-missing = [c for c in ["ID","S","O","D","NPR"] if c not in df.columns]
-if missing:
-    st.error(f"Colunas essenciais ausentes após mapeamento: {missing}")
-    st.stop()
-
-st.write("### 📊 Dados padronizados (após mapeamento)")
-st.dataframe(df, use_container_width=True)
-
-# -------------------- NPR Numérico ----------------------
-res_num = df[["ID","S","O","D","NPR"]].copy()
-res_num["R_SO_num"]      = (res_num["S"] * res_num["O"]) / 10.0
-res_num["R_final_num"]   = (res_num["S"] * res_num["O"] * res_num["D"]) / 100.0
-res_num["R_neutral_num"] = (res_num["S"] * res_num["O"] * D_REF) / 100.0
-res_num["Δ_num"]         = res_num["R_final_num"] - res_num["R_neutral_num"]
-res_num["U_num"]         = res_num["R_final_num"] / res_num["R_SO_num"]
-res_num["U_adj"]         = res_num["U_num"] - (D_REF/10)
-res_num["NPR_norm"]      = res_num["R_final_num"]
-res_num["NPR_band"]      = res_num["NPR_norm"].apply(lambda v: to_band(v, NPR_BANDS_NORM))
-res_num["NPR_rank"]      = res_num["R_final_num"].rank(method="min", ascending=False).astype(int)
-res_num = res_num.sort_values("ID").reset_index(drop=True)
-
-# -------------------- FUZZY (Stage 1 & 2) ---------------
+# -------------------- Funções Fuzzy --------------------
 Z = np.linspace(0, 10, 1001)
+
 def _build_terms(spec):
     terms={}
     for name,tup in spec.items():
@@ -252,155 +171,442 @@ def stage2_final_fuzzy(rso,d):
         agg=np.maximum(agg,np.minimum(w,risk_sets[term](Z)))
     return defuzz_centroid(agg)
 
-rows=[]
-for r in df[["ID","S","O","D"]].itertuples(index=False):
-    ID,S,O,D = r
-    rso  = stage1_rso_fuzzy(S,O)
-    rfin = stage2_final_fuzzy(rso,D)
-    rows.append((ID,S,O,D,rso,rfin))
+# ==================== INTERFACE STREAMLIT ====================
 
-res_fuzzy = pd.DataFrame(rows, columns=["ID","S","O","D","R_SO_fuzzy","R_final_fuzzy"])
-res_fuzzy["Δ_fuzzy"]   = res_fuzzy["R_final_fuzzy"] - res_fuzzy["R_SO_fuzzy"]
-res_fuzzy["Fuzzy_band"]= res_fuzzy["R_final_fuzzy"].apply(lambda v: to_band(v, FUZZY_BANDS))
-res_fuzzy["Fuzzy_rank"]= res_fuzzy["R_final_fuzzy"].rank(method="min", ascending=False).astype(int)
-res_fuzzy = res_fuzzy.sort_values("ID").reset_index(drop=True)
-
-# -------------------- Consolidação -----------------------
-res_cmp = res_num.merge(
-    res_fuzzy[["ID","S","O","D","R_SO_fuzzy","R_final_fuzzy","Δ_fuzzy","Fuzzy_band","Fuzzy_rank"]],
-    on=["ID","S","O","D"], how="left", validate="one_to_one"
-).sort_values("ID").reset_index(drop=True)
-
-res_cmp["band_change"] = np.where(
-    res_cmp["NPR_band"].astype(str) == res_cmp["Fuzzy_band"].astype(str),
-    "—",
-    res_cmp["NPR_band"].astype(str) + " → " + res_cmp["Fuzzy_band"].astype(str)
-)
-res_cmp["Δ_flag"] = np.where(res_cmp["Δ_fuzzy"] > 1e-9, "↑D",
-                      np.where(res_cmp["Δ_fuzzy"] < -1e-9, "↓D", "="))
-
-# -------------------- UI: Abas e Gráficos ----------------
+# Cabeçalho
+st.title("🏔️ Classificação de Riscos Geotécnicos em Taludes Rodoviários")
+st.markdown("### Metodologia FMEA com Lógica Fuzzy")
+st.markdown("**PUC-Rio** | Antônio Augusto Zucchi Leite, Fernanda Defilippi Bittar, Antonio Krishnamurti Beleño de Oliveira, Márcio Leão")
 st.markdown("---")
-st.subheader("Análises (abas abaixo)")
 
+# -------------------- Upload de arquivo --------------------
+st.sidebar.header("📁 Upload de Dados")
+uploaded = st.sidebar.file_uploader(
+    "Envie seu arquivo CSV", 
+    type=["csv"],
+    help="O arquivo deve conter colunas: ID, S, O, D, NPR (opcional)"
+)
+
+# Carregamento de dados
+if uploaded:
+    try:
+        df_raw = read_csv_robust(uploaded)
+        st.sidebar.success(f"✅ Arquivo carregado: {uploaded.name}")
+    except Exception as e:
+        st.error(f"❌ Erro ao ler arquivo: {e}")
+        st.stop()
+else:
+    st.sidebar.info("📌 Usando dados de exemplo")
+    df_raw = pd.DataFrame([
+        [1,6,3,3,54],[2,9,3,6,162],[3,6,3,3,54],[4,8,3,7,168],[5,6,6,5,180],
+        [6,10,3,8,240],[7,5,3,3,45],[8,7,5,4,140],[9,8,5,7,280],[10,6,4,6,144],
+        [11,9,4,7,252],[12,5,7,4,140],[13,7,3,6,126],[14,8,3,5,120],[15,8,4,6,192],
+        [16,7,5,5,175],[17,4,3,3,36],[18,5,5,6,150],[19,9,2,4,72],[20,8,2,8,128]
+    ], columns=["ID","S","O","D","NPR"])
+
+# -------------------- Mapeamento de colunas --------------------
+st.sidebar.markdown("---")
+st.sidebar.header("⚙️ Mapeamento de Colunas")
+
+cols = list(df_raw.columns)
+lower = {c: c.lower() for c in cols}
+
+def guess(syns):
+    for c in cols:
+        for k in syns:
+            if lower[c] == k: return c
+    for c in cols:
+        for k in syns:
+            if k in lower[c]: return c
+    return cols[0] if cols else None
+
+id_guess = guess(["id","item"])
+s_guess  = guess(["s","sev","severidade","severity"])
+o_guess  = guess(["o","oco","ocorrencia","ocorrência","occurrence"])
+d_guess  = guess(["d","det","detec","detecção","deteccao","detection"])
+npr_guess= guess(["npr","rpn"])
+
+sel_id  = st.sidebar.selectbox("Coluna ID",   cols, index=cols.index(id_guess)  if id_guess  in cols else 0, key="id")
+sel_s   = st.sidebar.selectbox("Coluna S (Severidade)",    cols, index=cols.index(s_guess)   if s_guess   in cols else 0, key="s")
+sel_o   = st.sidebar.selectbox("Coluna O (Ocorrência)",    cols, index=cols.index(o_guess)   if o_guess   in cols else 0, key="o")
+sel_d   = st.sidebar.selectbox("Coluna D (Detecção)",    cols, index=cols.index(d_guess)   if d_guess   in cols else 0, key="d")
+sel_npr = st.sidebar.selectbox("Coluna NPR",  cols, index=cols.index(npr_guess) if npr_guess in cols else 0, key="npr")
+
+# Renomear colunas
+df = df_raw.rename(columns={
+    sel_id:"ID", sel_s:"S", sel_o:"O", sel_d:"D", sel_npr:"NPR"
+}).copy()
+
+# Forçar numérico
+for c in ["ID","S","O","D","NPR"]:
+    if c in df.columns:
+        df[c] = coerce_numeric(df[c])
+
+# Preencher NPR ausente
+if "NPR" in df.columns and df["NPR"].isna().any():
+    df.loc[df["NPR"].isna(), "NPR"] = df.loc[df["NPR"].isna(), "S"] * df.loc[df["NPR"].isna(), "O"] * df.loc[df["NPR"].isna(), "D"]
+
+# Validar colunas essenciais
+missing = [c for c in ["ID","S","O","D"] if c not in df.columns]
+if missing:
+    st.error(f"❌ Colunas essenciais ausentes: {missing}")
+    st.stop()
+
+# -------------------- Pré-visualização --------------------
+with st.expander("📄 Visualizar dados carregados", expanded=False):
+    st.dataframe(df, use_container_width=True, height=300)
+    st.caption(f"Total de registros: {len(df)}")
+
+# -------------------- Botão para processar --------------------
+st.sidebar.markdown("---")
+process_button = st.sidebar.button("🚀 **PROCESSAR ANÁLISE**", type="primary", use_container_width=True)
+
+if not process_button:
+    st.info("👈 Configure as colunas na barra lateral e clique em **PROCESSAR ANÁLISE** para iniciar os cálculos.")
+    st.stop()
+
+# ==================== PROCESSAMENTO ====================
+with st.spinner("⚙️ Processando análise..."):
+    
+    # -------------------- NPR Numérico --------------------
+    res_num = df[["ID","S","O","D","NPR"]].copy()
+    res_num["R_SO_num"]      = (res_num["S"] * res_num["O"]) / 10.0
+    res_num["R_final_num"]   = (res_num["S"] * res_num["O"] * res_num["D"]) / 100.0
+    res_num["R_neutral_num"] = (res_num["S"] * res_num["O"] * D_REF) / 100.0
+    res_num["Δ_num"]         = res_num["R_final_num"] - res_num["R_neutral_num"]
+    res_num["U_num"]         = res_num["R_final_num"] / res_num["R_SO_num"]
+    res_num["U_adj"]         = res_num["U_num"] - (D_REF/10)
+    res_num["NPR_norm"]      = res_num["R_final_num"]
+    res_num["NPR_band"]      = res_num["NPR_norm"].apply(lambda v: to_band(v, NPR_BANDS_NORM))
+    res_num["NPR_rank"]      = res_num["R_final_num"].rank(method="min", ascending=False).astype(int)
+    res_num = res_num.sort_values("ID").reset_index(drop=True)
+
+    # -------------------- FUZZY (Stage 1 & 2) --------------------
+    rows=[]
+    progress_bar = st.progress(0)
+    for idx, r in enumerate(df[["ID","S","O","D"]].itertuples(index=False)):
+        ID,S,O,D = r
+        rso  = stage1_rso_fuzzy(S,O)
+        rfin = stage2_final_fuzzy(rso,D)
+        rows.append((ID,S,O,D,rso,rfin))
+        progress_bar.progress((idx + 1) / len(df))
+    
+    progress_bar.empty()
+
+    res_fuzzy = pd.DataFrame(rows, columns=["ID","S","O","D","R_SO_fuzzy","R_final_fuzzy"])
+    res_fuzzy["Δ_fuzzy"]   = res_fuzzy["R_final_fuzzy"] - res_fuzzy["R_SO_fuzzy"]
+    res_fuzzy["Fuzzy_band"]= res_fuzzy["R_final_fuzzy"].apply(lambda v: to_band(v, FUZZY_BANDS))
+    res_fuzzy["Fuzzy_rank"]= res_fuzzy["R_final_fuzzy"].rank(method="min", ascending=False).astype(int)
+    res_fuzzy = res_fuzzy.sort_values("ID").reset_index(drop=True)
+
+    # -------------------- Consolidação --------------------
+    res_cmp = res_num.merge(
+        res_fuzzy[["ID","S","O","D","R_SO_fuzzy","R_final_fuzzy","Δ_fuzzy","Fuzzy_band","Fuzzy_rank"]],
+        on=["ID","S","O","D"], how="left", validate="one_to_one"
+    ).sort_values("ID").reset_index(drop=True)
+
+    res_cmp["band_change"] = np.where(
+        res_cmp["NPR_band"].astype(str) == res_cmp["Fuzzy_band"].astype(str),
+        "—",
+        res_cmp["NPR_band"].astype(str) + " → " + res_cmp["Fuzzy_band"].astype(str)
+    )
+    res_cmp["Δ_flag"] = np.where(res_cmp["Δ_fuzzy"] > 1e-9, "↑D",
+                          np.where(res_cmp["Δ_fuzzy"] < -1e-9, "↓D", "="))
+
+st.success("✅ Análise concluída!")
+
+# ==================== VISUALIZAÇÃO DE RESULTADOS ====================
+st.markdown("---")
+st.header("📊 Resultados da Análise")
+
+# CSS para estilizar abas
 st.markdown("""
 <style>
-.stTabs [role="tab"] { font-size: 1.25rem !important; padding: .6rem 1rem !important; }
-.stTabs [role="tab"][aria-selected="true"] { font-weight: 700 !important; }
-.stTabs [role="tablist"] { gap: .25rem !important; }
+.stTabs [data-baseweb="tab-list"] {
+    gap: 8px;
+}
+.stTabs [data-baseweb="tab"] {
+    height: 50px;
+    padding: 8px 24px;
+    background-color: #f0f2f6;
+    border-radius: 5px 5px 0 0;
+    font-weight: 600;
+}
+.stTabs [aria-selected="true"] {
+    background-color: #ff4b4b;
+    color: white;
+}
 </style>
 """, unsafe_allow_html=True)
 
-tab0, tab1, tab2, tab3, tab4 = st.tabs(
-    ["📄 Dados", "📊 NPR", "🔮 Fuzzy", "🧩 Comparação", "📈 Relatório"]
+tab1, tab2, tab3, tab4 = st.tabs(
+    ["📊 NPR Tradicional", "🔮 Análise Fuzzy", "🧩 Comparação", "📈 Relatório Final"]
 )
 
-with tab0:
-    st.subheader("📄 Dados padronizados")
-    st.dataframe(df, use_container_width=True)
-
+# -------------------- ABA 1: NPR --------------------
 with tab1:
-    st.subheader("📊 NPR Numérico")
-    st.dataframe(res_num, use_container_width=True)
+    st.subheader("📊 Análise NPR Tradicional")
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        st.dataframe(
+            res_num.style.background_gradient(subset=["R_final_num"], cmap="YlOrRd"),
+            use_container_width=True,
+            height=400
+        )
+    
+    with col2:
+        st.metric("Risco Mínimo", f"{res_num['R_final_num'].min():.2f}")
+        st.metric("Risco Máximo", f"{res_num['R_final_num'].max():.2f}")
+        st.metric("Risco Médio", f"{res_num['R_final_num'].mean():.2f}")
+        
+        # Distribuição por faixa
+        counts = res_num["NPR_band"].value_counts().reindex(BAND_ORDER, fill_value=0)
+        for band in BAND_ORDER:
+            st.markdown(f"**{band}**: {counts[band]} itens")
+    
+    # Gráficos
+    st.markdown("#### Visualizações")
+    col_a, col_b = st.columns(2)
+    
+    with col_a:
+        # Distribuição por faixas
+        counts = res_num["NPR_band"].value_counts().reindex(BAND_ORDER, fill_value=0)
+        fig, ax = plt.subplots(figsize=(6, 4))
+        bars = ax.bar(BAND_ORDER, counts.values, color=[BAND_COLORS[b] for b in BAND_ORDER], 
+                      edgecolor="black", linewidth=1.5)
+        ax.set_title("Distribuição por Faixas de Risco (NPR)", fontsize=12, fontweight='bold')
+        ax.set_xlabel("Faixas de Risco"); ax.set_ylabel("Quantidade")
+        for i, v in enumerate(counts.values):
+            ax.annotate(str(int(v)), (i, v), xytext=(0, 5), textcoords="offset points", 
+                       ha="center", fontweight='bold')
+        st.pyplot(fig)
+        plt.close()
+    
+    with col_b:
+        # Scatter plot
+        vmin = float(res_num["R_final_num"].min()); vmax = float(res_num["R_final_num"].max())
+        fig, ax = plt.subplots(figsize=(6, 4))
+        sc = ax.scatter(res_num["R_SO_num"], res_num["D"], c=res_num["R_final_num"],
+                       cmap="YlOrRd", vmin=vmin, vmax=vmax, s=80, edgecolor="k", 
+                       linewidth=0.8, alpha=0.9)
+        ax.set_title("NPR: R_SO × Detecção", fontsize=12, fontweight='bold')
+        ax.set_xlabel("R_SO_num (S × O / 10)")
+        ax.set_ylabel("D (Detecção)")
+        ax.set_xlim(0,10); ax.set_ylim(0,11); ax.grid(True, alpha=0.3)
+        cb = plt.colorbar(sc, ax=ax); cb.set_label("R_final", rotation=270, labelpad=20)
+        st.pyplot(fig)
+        plt.close()
 
-    counts = res_num["NPR_band"].value_counts().reindex(BAND_ORDER, fill_value=0)
-    fig, ax = plt.subplots(figsize=(7.2, 3.8))
-    ax.bar(BAND_ORDER, counts.values, color=[BAND_COLORS[b] for b in BAND_ORDER], edgecolor="black")
-    ax.set_title("Distribuição por faixas — NPR_band (NPR normalizado)")
-    ax.set_xlabel("Faixas (NPR_norm)"); ax.set_ylabel("Quantidade")
-    for i, v in enumerate(counts.values):
-        ax.annotate(str(int(v)), (i, v), xytext=(0, 5), textcoords="offset points", ha="center")
-    st.pyplot(fig)
-
-    vmin = float(res_num["R_final_num"].min()); vmax = float(res_num["R_final_num"].max())
-    fig2, ax2 = plt.subplots(figsize=(7.2, 4.2))
-    sc = ax2.scatter(res_num["R_SO_num"], res_num["D"], c=res_num["R_final_num"],
-                     cmap="YlOrRd", vmin=vmin, vmax=vmax, s=60, edgecolor="k", linewidth=0.5, alpha=0.95)
-    ax2.set_title("NPR (numérico): R_SO_num × D (cor = R_final_num)")
-    ax2.set_xlabel("R_SO_num = (S × O) / 10  [0–10]")
-    ax2.set_ylabel("D (Detecção) [1–10]")
-    ax2.set_xlim(0,10); ax2.set_ylim(1,10); ax2.grid(True, alpha=0.25)
-    cb = plt.colorbar(sc, ax=ax2); cb.set_label(f"R_final_num\n({vmin:.2f}–{vmax:.2f})", rotation=0, ha="left", labelpad=20)
-    st.pyplot(fig2)
-
+# -------------------- ABA 2: FUZZY --------------------
 with tab2:
-    st.subheader("🔮 Fuzzy-FMEA")
-    st.dataframe(res_fuzzy, use_container_width=True)
+    st.subheader("🔮 Análise com Lógica Fuzzy")
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        st.dataframe(
+            res_fuzzy.style.background_gradient(subset=["R_final_fuzzy"], cmap="YlOrRd"),
+            use_container_width=True,
+            height=400
+        )
+    
+    with col2:
+        st.metric("Risco Mínimo", f"{res_fuzzy['R_final_fuzzy'].min():.2f}")
+        st.metric("Risco Máximo", f"{res_fuzzy['R_final_fuzzy'].max():.2f}")
+        st.metric("Risco Médio", f"{res_fuzzy['R_final_fuzzy'].mean():.2f}")
+        
+        # Distribuição por faixa
+        counts = res_fuzzy["Fuzzy_band"].value_counts().reindex(BAND_ORDER, fill_value=0)
+        for band in BAND_ORDER:
+            st.markdown(f"**{band}**: {counts[band]} itens")
+    
+    # Gráficos
+    st.markdown("#### Visualizações")
+    col_a, col_b = st.columns(2)
+    
+    with col_a:
+        # Distribuição por faixas
+        counts = res_fuzzy["Fuzzy_band"].value_counts().reindex(BAND_ORDER, fill_value=0)
+        fig, ax = plt.subplots(figsize=(6, 4))
+        bars = ax.bar(BAND_ORDER, counts.values, color=[BAND_COLORS[b] for b in BAND_ORDER], 
+                      edgecolor="black", linewidth=1.5)
+        ax.set_title("Distribuição por Faixas de Risco (Fuzzy)", fontsize=12, fontweight='bold')
+        ax.set_xlabel("Faixas de Risco"); ax.set_ylabel("Quantidade")
+        for i, v in enumerate(counts.values):
+            ax.annotate(str(int(v)), (i, v), xytext=(0, 5), textcoords="offset points", 
+                       ha="center", fontweight='bold')
+        st.pyplot(fig)
+        plt.close()
+    
+    with col_b:
+        # Scatter plot
+        vmin_fz = float(res_fuzzy["R_final_fuzzy"].min())
+        vmax_fz = float(res_fuzzy["R_final_fuzzy"].max())
+        fig, ax = plt.subplots(figsize=(6, 4))
+        sc = ax.scatter(res_fuzzy["R_SO_fuzzy"], res_fuzzy["D"], c=res_fuzzy["R_final_fuzzy"],
+                       cmap="YlOrRd", vmin=vmin_fz, vmax=vmax_fz, s=80, edgecolor="k", 
+                       linewidth=0.8, alpha=0.9)
+        ax.set_title("Fuzzy: R_SO × Detecção", fontsize=12, fontweight='bold')
+        ax.set_xlabel("R_SO_fuzzy (Estágio 1)")
+        ax.set_ylabel("D (Detecção)")
+        ax.set_xlim(0,10); ax.set_ylim(0,11); ax.grid(True, alpha=0.3)
+        cb = plt.colorbar(sc, ax=ax); cb.set_label("R_final_fuzzy", rotation=270, labelpad=20)
+        st.pyplot(fig)
+        plt.close()
 
-    counts = res_fuzzy["Fuzzy_band"].value_counts().reindex(BAND_ORDER, fill_value=0)
-    fig, ax = plt.subplots(figsize=(7.2, 3.8))
-    ax.bar(BAND_ORDER, counts.values, color=[BAND_COLORS[b] for b in BAND_ORDER], edgecolor="black")
-    ax.set_title("Distribuição por faixas — Fuzzy_band (R_final)")
-    ax.set_xlabel("Faixas Fuzzy"); ax.set_ylabel("Quantidade")
-    for i, v in enumerate(counts.values):
-        ax.annotate(str(int(v)), (i, v), xytext=(0, 5), textcoords="offset points", ha="center")
-    st.pyplot(fig)
-
-    vmin_fz = float(res_fuzzy["R_final_fuzzy"].min()); vmax_fz = float(res_fuzzy["R_final_fuzzy"].max())
-    fig2, ax2 = plt.subplots(figsize=(7.2, 4.2))
-    sc = ax2.scatter(res_fuzzy["R_SO_fuzzy"], res_fuzzy["D"], c=res_fuzzy["R_final_fuzzy"],
-                     cmap="YlOrRd", vmin=vmin_fz, vmax=vmax_fz, s=60, edgecolor="k", linewidth=0.5, alpha=0.95)
-    ax2.set_title("Fuzzy: R_SO_fuzzy × D (cor = R_final_fuzzy)")
-    ax2.set_xlabel("R_SO_fuzzy (Estágio 1) [0–10]")
-    ax2.set_ylabel("D (Detecção) [1–10]")
-    ax2.set_xlim(0,10); ax2.set_ylim(1,10); ax2.grid(True, alpha=0.25)
-    cb = plt.colorbar(sc, ax=ax2); cb.set_label(f"R_final_fuzzy\n({vmin_fz:.2f}–{vmax_fz:.2f})", rotation=0, ha="left", labelpad=20)
-    st.pyplot(fig2)
-
+# -------------------- ABA 3: COMPARAÇÃO --------------------
 with tab3:
-    st.subheader("🧩 Matriz NPR × Fuzzy (4×4) e Consolidação")
-    st.dataframe(res_cmp, use_container_width=True)
-    xtab = pd.crosstab(res_cmp["NPR_band"], res_cmp["Fuzzy_band"]).reindex(
-        index=BAND_ORDER, columns=BAND_ORDER, fill_value=0
+    st.subheader("🧩 Comparação: NPR vs Fuzzy")
+    
+    # Tabela consolidada
+    st.dataframe(
+        res_cmp.style.background_gradient(subset=["R_final_num", "R_final_fuzzy"], cmap="YlOrRd"),
+        use_container_width=True,
+        height=400
     )
-    fig, ax = plt.subplots(figsize=(5.4, 4.4))
-    im = ax.imshow(xtab.values, cmap="YlOrRd")
-    ax.set_xticks(range(4)); ax.set_yticks(range(4))
-    ax.set_xticklabels(BAND_ORDER); ax.set_yticklabels(BAND_ORDER)
-    ax.set_xlabel("Fuzzy_band"); ax.set_ylabel("NPR_band")
-    ax.set_title("Matriz 4×4 — NPR × Fuzzy (contagem)")
-    for i in range(4):
-        for j in range(4):
-            ax.text(j, i, int(xtab.iloc[i, j]), ha="center", va="center")
-    cb = plt.colorbar(im, ax=ax); cb.set_label("Contagem")
-    st.pyplot(fig)
+    
+    col_a, col_b = st.columns(2)
+    
+    with col_a:
+        # Matriz de confusão
+        st.markdown("#### Matriz de Concordância 4×4")
+        xtab = pd.crosstab(res_cmp["NPR_band"], res_cmp["Fuzzy_band"]).reindex(
+            index=BAND_ORDER, columns=BAND_ORDER, fill_value=0
+        )
+        fig, ax = plt.subplots(figsize=(6, 5))
+        im = ax.imshow(xtab.values, cmap="YlOrRd", aspect='auto')
+        ax.set_xticks(range(4)); ax.set_yticks(range(4))
+        ax.set_xticklabels(BAND_ORDER); ax.set_yticklabels(BAND_ORDER)
+        ax.set_xlabel("Fuzzy (Colunas)", fontweight='bold')
+        ax.set_ylabel("NPR (Linhas)", fontweight='bold')
+        ax.set_title("Matriz NPR × Fuzzy", fontweight='bold')
+        
+        # Adicionar valores nas células
+        for i in range(4):
+            for j in range(4):
+                text_color = "white" if xtab.iloc[i, j] > xtab.values.max()/2 else "black"
+                ax.text(j, i, int(xtab.iloc[i, j]), ha="center", va="center",
+                       color=text_color, fontsize=14, fontweight='bold')
+        
+        plt.colorbar(im, ax=ax, label="Contagem")
+        st.pyplot(fig)
+        plt.close()
+    
+    with col_b:
+        # Scatter comparativo
+        st.markdown("#### Correlação NPR vs Fuzzy")
+        fig, ax = plt.subplots(figsize=(6, 5))
+        ax.scatter(res_cmp["R_final_num"], res_cmp["R_final_fuzzy"], 
+                  alpha=0.6, s=80, edgecolor='k', linewidth=0.5)
+        
+        # Linha de identidade
+        max_val = max(res_cmp["R_final_num"].max(), res_cmp["R_final_fuzzy"].max())
+        ax.plot([0, max_val], [0, max_val], 'r--', linewidth=2, label='Identidade')
+        
+        ax.set_xlabel("R_final_num (NPR)", fontweight='bold')
+        ax.set_ylabel("R_final_fuzzy", fontweight='bold')
+        ax.set_title("Correlação entre Métodos", fontweight='bold')
+        ax.grid(True, alpha=0.3)
+        ax.legend()
+        st.pyplot(fig)
+        plt.close()
 
+# -------------------- ABA 4: RELATÓRIO --------------------
 with tab4:
-    st.subheader("📈 Relatório Final (Spearman / Overlap / Export)")
+    st.subheader("📈 Relatório Final e Métricas")
+    
+    # Calcular métricas
     N = min(10, len(res_cmp))
     top_npr   = set(res_cmp.sort_values("R_final_num", ascending=False).head(N)["ID"])
     top_fuzzy = set(res_cmp.sort_values("R_final_fuzzy", ascending=False).head(N)["ID"])
     overlap   = len(top_npr & top_fuzzy)
     rho, pval = spearmanr(res_cmp["R_final_num"], res_cmp["R_final_fuzzy"])
-
+    
     fuzzy_dist = res_fuzzy["Fuzzy_band"].value_counts().reindex(BAND_ORDER, fill_value=0)
-    vmin_fz = float(res_fuzzy["R_final_fuzzy"].min()); vmax_fz = float(res_fuzzy["R_final_fuzzy"].max())
-
-    st.write(f"- Spearman ρ: **{rho:.3f}** (p={pval:.3g})")
-    st.write(f"- Top-{N} overlap: **{overlap}/{N} ({overlap/N:.0%})**")
-    st.write(f"- R_final_fuzzy range: **{vmin_fz:.2f} – {vmax_fz:.2f}**")
-    st.write(f"- 4 faixas populadas: **{'SIM ✅' if all(fuzzy_dist > 0) else 'NÃO ❌'}**")
-
-    c1,c2,c3 = st.columns(3)
-    with c1:
-        st.download_button("⬇️ NPR (numérico)", res_num.to_csv(index=False).encode("utf-8"),
-                           "FMEA_NPR_numerico.csv", "text/csv")
-    with c2:
-        st.download_button("⬇️ Fuzzy", res_fuzzy.to_csv(index=False).encode("utf-8"),
-                           "FMEA_Fuzzy.csv", "text/csv")
-    with c3:
-        st.download_button("⬇️ Consolidação", res_cmp.to_csv(index=False).encode("utf-8"),
-                           "FMEA_Consolidado.csv", "text/csv")
+    vmin_fz = float(res_fuzzy["R_final_fuzzy"].min())
+    vmax_fz = float(res_fuzzy["R_final_fuzzy"].max())
+    all_bands_populated = all(fuzzy_dist > 0)
     
+    # Métricas em cards
+    col1, col2, col3, col4 = st.columns(4)
     
+    with col1:
+        st.metric(
+            "Correlação Spearman",
+            f"{rho:.3f}",
+            help="Correlação de ranking entre NPR e Fuzzy"
+        )
     
-    # --- Botão para executar cálculos e gráficos ---
-    st.sidebar.markdown("## Execução")
-    go = st.sidebar.button("🚀 Gerar análise")
+    with col2:
+        st.metric(
+            f"Overlap Top-{N}",
+            f"{overlap}/{N}",
+            f"{overlap/N:.0%}",
+            help="Concordância nos itens mais críticos"
+        )
+    
+    with col3:
+        st.metric(
+            "Range Fuzzy",
+            f"{vmin_fz:.2f} - {vmax_fz:.2f}",
+            help="Amplitude dos valores fuzzy"
+        )
+    
+    with col4:
+        if all_bands_populated:
+            st.metric("Cobertura de Faixas", "✅ Completa", help="Todas as 4 faixas possuem itens")
+        else:
+            st.metric("Cobertura de Faixas", "⚠️ Incompleta", help="Algumas faixas estão vazias")
+    
+    # Resumo textual
+    st.markdown("#### 📝 Resumo Executivo")
+    st.write(f"""
+    - **Total de itens analisados**: {len(res_cmp)}
+    - **Correlação entre métodos**: ρ = {rho:.3f} (p-value = {pval:.4g})
+    - **Concordância Top-{N}**: {overlap} de {N} itens ({overlap/N:.0%})
+    - **Distribuição Fuzzy**: Green={fuzzy_dist['Green']}, Yellow={fuzzy_dist['Yellow']}, 
+      Orange={fuzzy_dist['Orange']}, Red={fuzzy_dist['Red']}
+    - **Interpretação**: {'Alta concordância entre métodos' if rho > 0.8 else 'Diferenças significativas detectadas'}
+    """)
+    
+    # Downloads
+    st.markdown("#### 💾 Exportar Resultados")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.download_button(
+            "⬇️ NPR Numérico",
+            res_num.to_csv(index=False).encode("utf-8"),
+            "FMEA_NPR_numerico.csv",
+            "text/csv",
+            use_container_width=True
+        )
+    
+    with col2:
+        st.download_button(
+            "⬇️ Análise Fuzzy",
+            res_fuzzy.to_csv(index=False).encode("utf-8"),
+            "FMEA_Fuzzy.csv",
+            "text/csv",
+            use_container_width=True
+        )
+    
+    with col3:
+        st.download_button(
+            "⬇️ Consolidação Completa",
+            res_cmp.to_csv(index=False).encode("utf-8"),
+            "FMEA_Consolidado.csv",
+            "text/csv",
+            use_container_width=True
+        )
 
-    if not go:
-        st.info("Clique em **Gerar análise** na barra lateral para calcular e mostrar os gráficos.")
-        # Mostra apenas pré-visualização e mapeamento
-        st.write("### 📄 Pré-visualização do arquivo")
-        st.dataframe(df_raw.head(30), use_container_width=True)
-        st.stop()
+# -------------------- Rodapé --------------------
+st.markdown("---")
+st.markdown("""
+<div style='text-align: center; color: #666; padding: 20px;'>
+    <p><strong>Fuzzy FMEA - Análise de Riscos Geotécnicos</strong></p>
+    <p>Desenvolvido na PUC-Rio | © 2024</p>
+</div>
+""", unsafe_allow_html=True)
